@@ -13,8 +13,9 @@ def submit(folder,prompt,sirio,tein=None,status=print):
     if not setting('ENHANCOR_WEBHOOK_URL'):raise ValueError('Webhook URL required. Install cloudflared and restart the app, or set ENHANCOR_WEBHOOK_URL.')
     if not (folder/'audio-manifest.json').exists():raise ValueError('Audio separation must complete before submission.')
     from audio_workflow import prepare_seedance_video
-    status('Pitching isolated vocals +3 semitones and embedding in colored-depth video')
-    prepared=folder/'seedance-input.mp4' if is_mesh(folder) else prepare_seedance_video(folder)
+    clean_audio=json.loads((folder/'audio-manifest.json').read_text()).get('audio_policy')=='original-dialogue-no-pitch-shift'
+    status('Embedding clean original dialogue' if clean_audio else 'Pitching isolated vocals +3 semitones and embedding in colored-depth video')
+    prepared=folder/'seedance-input.mp4' if is_mesh(folder) else prepare_seedance_video(folder,semitones=0) if clean_audio else prepare_seedance_video(folder)
     status('Uploading video with embedded vocals and character references')
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:urls=list(pool.map(upload,[prepared,sirio]+([tein] if tein else [])))
     p={'resolution':'1080p','output_format':'mp4','pass_faces':True,'webhook_url':setting('ENHANCOR_WEBHOOK_URL','')}
@@ -34,6 +35,8 @@ def submit(folder,prompt,sirio,tein=None,status=print):
         mesh_mode=json.loads((folder/'workflow-mode.json').read_text()).get('mode')
         description='depth composite with face mesh overlay' if mesh_mode=='depth_mesh' else 'original video with face mesh overlay'
         p['prompt']=p['prompt'].replace('colored-depth composite',description)+' Remove all face mesh lines and any depth colors from the output; use them only for expression and lip motion guidance. Replace the entire original identity including hair. Preserve the exact embedded dialogue and timing.'
+    if clean_audio:
+        p['prompt']=p['prompt'].replace('isolated vocals pitched up three semitones, without the music bed','original dialogue with no pitch modification').replace('isolated vocals pitched +3 semitones','original dialogue with no pitch modification')
     (folder/'seedance-request.json').write_text(json.dumps(p,indent=2));h={'x-api-key':key};base=setting('ENHANCOR_BASE_URL','https://apireq.enhancor.ai/api/seedance2.5/v1').rstrip('/')+'/'
     r=requests.post(base+'queue',headers=h,json=p,timeout=90);
     if not r.ok:
