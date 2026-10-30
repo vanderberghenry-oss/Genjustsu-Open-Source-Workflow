@@ -100,6 +100,15 @@ def retarget_points(reference,frames,preserve_indices=(),reference_aspect=1,sour
     for frame,(motion,(origin,basis,scale)) in zip(frames,source):
         points=(target+motion-baseline)@basis*scale+origin
         points[:,0]/=source_aspect
+        if preserve_indices:
+            original=np.asarray([[p['x'],p['y']] for p in frame['faces'][0]])
+            # Taper displacement around expression anchors rather than joining
+            # an unchanged lip/eyelid directly to a displaced mesh neighbour.
+            delta=original[:,None,:]-original[list(preserve_indices)][None,:,:]
+            delta[:,:,0]*=source_aspect
+            distance=np.sqrt((delta**2).sum(axis=2)).min(axis=1)
+            weight=np.clip(distance/(scale*.35),0,1)
+            points=original+(points-original)*weight[:,None]
         # Keep the performer's mouth, eyelids and brows; a smiling master must
         # not impose its expression on every performance.
         for index in preserve_indices:
