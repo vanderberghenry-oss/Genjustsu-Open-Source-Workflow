@@ -82,19 +82,40 @@ def finish_preview(generated,folder):
             if p.dts is not None:p.stream=astream;out.mux(p)
     return target
 
+def _rubberband_pitch(src, dst, semitones):
+    """Shift pitch by semitones, preserving duration, using Rubber Band.
+
+    Prefers the standalone `rubberband` CLI. Falls back to FFmpeg's `rubberband`
+    filter, which links the same library - this machine has the filter and not
+    the CLI, and the algorithm is the same. Returns the engine used.
+    """
+    import subprocess, shutil, math
+    binary = shutil.which('rubberband')
+    if binary:
+        subprocess.run([binary, '--fine', '--pitch', str(semitones), '--time', '1', str(src), str(dst)],
+                       check=True, capture_output=True)
+        return 'rubberband-cli'
+    ffmpeg = shutil.which('ffmpeg')
+    if not ffmpeg:
+        raise RuntimeError('Rubber Band is required for pitch shifting: neither the rubberband CLI nor ffmpeg was found.')
+    ratio = 2 ** (semitones / 12)
+    subprocess.run([ffmpeg, '-y', '-v', 'error', '-i', str(src), '-af', 'rubberband=pitch=%.6f' % ratio,
+                    '-ar', str(RATE), '-ac', '2', str(dst)], check=True, capture_output=True)
+    return 'ffmpeg-librubberband'
+
+
 def prepare_seedance_video(folder, semitones=3):
-    """Embed +3-semitone isolated vocals into the colored-depth composite."""
+    """Embed isolated vocals into the colored-depth composite, optionally pitched."""
     import subprocess,shutil
     folder=Path(folder)
     if semitones == 0:
         pitched=folder/'vocals.wav'
         samples=read_audio(pitched)
         n=samples.shape[1]
+        engine='none'
     else:
-        binary=shutil.which('rubberband')
-        if not binary:raise RuntimeError('Rubber Band is required for pitch shifting.')
         pitched=folder/f'vocals-plus{semitones}.wav'
-        subprocess.run([binary,'--fine','--pitch',str(semitones),'--time','1',str(folder/'vocals.wav'),str(pitched)],check=True,capture_output=True)
+        engine=_rubberband_pitch(folder/'vocals.wav',pitched,semitones)
         original=read_audio(folder/'vocals.wav');samples=read_audio(pitched)
         n=original.shape[1]
         samples=np.pad(samples,((0,0),(0,max(0,n-samples.shape[1]))))[:,:n]
@@ -110,6 +131,6 @@ def prepare_seedance_video(folder, semitones=3):
         for packet in audio.encode():out.mux(packet)
     manifest=folder/'audio-manifest.json'
     data=json.loads(manifest.read_text()) if manifest.exists() else {}
-    data.update(seedance_video='seedance-input.mp4',seedance_audio=None,pitch_semitones=semitones,embedded_vocals=pitched.name,final_audio='entire original source audio')
+    data.update(seedance_video='seedance-input.mp4',seedance_audio=None,pitch_semitones=semitones,pitch_engine=engine,embedded_vocals=pitched.name,final_audio='entire original source audio')
     manifest.write_text(json.dumps(data,indent=2))
     return target
